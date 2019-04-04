@@ -1,7 +1,7 @@
 /*
  * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -31,13 +31,13 @@ static void (*free_impl)(void *, const char *, int)
     = CRYPTO_free;
 
 #ifndef OPENSSL_NO_CRYPTO_MDEBUG
-static int malloc_count;
-static int realloc_count;
-static int free_count;
-static int dummy;
+# include "internal/tsan_assist.h"
 
-# define INCREMENT(x) CRYPTO_atomic_add(&x, 1, &dummy, memdbg_lock)
-# define GET(ret, val) CRYPTO_atomic_read(&val, ret, memdbg_lock)
+static TSAN_QUALIFIER int malloc_count;
+static TSAN_QUALIFIER int realloc_count;
+static TSAN_QUALIFIER int free_count;
+
+# define INCREMENT(x) tsan_counter(&(x))
 
 static char *md_failstring;
 static long md_count;
@@ -98,11 +98,11 @@ void CRYPTO_get_mem_functions(
 void CRYPTO_get_alloc_counts(int *mcount, int *rcount, int *fcount)
 {
     if (mcount != NULL)
-        GET(mcount, malloc_count);
+        *mcount = tsan_load(&malloc_count);
     if (rcount != NULL)
-        GET(rcount, realloc_count);
+        *rcount = tsan_load(&realloc_count);
     if (fcount != NULL)
-        GET(fcount, free_count);
+        *fcount = tsan_load(&free_count);
 }
 
 /*

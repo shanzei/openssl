@@ -2,7 +2,7 @@
  * Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2017, Oracle and/or its affiliates.  All rights reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -266,9 +266,10 @@ static int aria_gcm_ctrl(EVP_CIPHER_CTX *c, int type, int arg, void *ptr)
         if ((arg > EVP_MAX_IV_LENGTH) && (arg > gctx->ivlen)) {
             if (gctx->iv != EVP_CIPHER_CTX_iv_noconst(c))
                 OPENSSL_free(gctx->iv);
-            gctx->iv = OPENSSL_malloc(arg);
-            if (gctx->iv == NULL)
+            if ((gctx->iv = OPENSSL_malloc(arg)) == NULL) {
+                EVPerr(EVP_F_ARIA_GCM_CTRL, ERR_R_MALLOC_FAILURE);
                 return 0;
+            }
         }
         gctx->ivlen = arg;
         return 1;
@@ -370,9 +371,10 @@ static int aria_gcm_ctrl(EVP_CIPHER_CTX *c, int type, int arg, void *ptr)
             if (gctx->iv == EVP_CIPHER_CTX_iv_noconst(c))
                 gctx_out->iv = EVP_CIPHER_CTX_iv_noconst(out);
             else {
-                gctx_out->iv = OPENSSL_malloc(gctx->ivlen);
-                if (gctx_out->iv == NULL)
+                if ((gctx_out->iv = OPENSSL_malloc(gctx->ivlen)) == NULL) {
+                    EVPerr(EVP_F_ARIA_GCM_CTRL, ERR_R_MALLOC_FAILURE);
                     return 0;
+                }
                 memcpy(gctx_out->iv, gctx->iv, gctx->ivlen);
             }
             return 1;
@@ -482,6 +484,16 @@ static int aria_gcm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     /* Don't reuse the IV */
     gctx->iv_set = 0;
     return 0;
+}
+
+static int aria_gcm_cleanup(EVP_CIPHER_CTX *ctx)
+{
+    EVP_ARIA_GCM_CTX *gctx = EVP_C_DATA(EVP_ARIA_GCM_CTX, ctx);
+
+    if (gctx->iv != EVP_CIPHER_CTX_iv_noconst(ctx))
+        OPENSSL_free(gctx->iv);
+
+    return 1;
 }
 
 static int aria_ccm_init_key(EVP_CIPHER_CTX *ctx, const unsigned char *key,
@@ -725,6 +737,8 @@ static int aria_ccm_cipher(EVP_CIPHER_CTX *ctx, unsigned char *out,
     }
 }
 
+#define aria_ccm_cleanup    NULL
+
 #define ARIA_AUTH_FLAGS  (EVP_CIPH_FLAG_DEFAULT_ASN1 \
                           | EVP_CIPH_CUSTOM_IV | EVP_CIPH_FLAG_CUSTOM_CIPHER \
                           | EVP_CIPH_ALWAYS_CALL_INIT | EVP_CIPH_CTRL_INIT \
@@ -737,7 +751,7 @@ static const EVP_CIPHER aria_##keylen##_##mode = { \
         ARIA_AUTH_FLAGS|EVP_CIPH_##MODE##_MODE,    \
         aria_##mode##_init_key,                    \
         aria_##mode##_cipher,                      \
-        NULL,                                      \
+        aria_##mode##_cleanup,                     \
         sizeof(EVP_ARIA_##MODE##_CTX),             \
         NULL,NULL,aria_##mode##_ctrl,NULL };       \
 const EVP_CIPHER *EVP_aria_##keylen##_##mode(void) \

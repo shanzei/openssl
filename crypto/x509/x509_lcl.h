@@ -1,7 +1,7 @@
 /*
- * Copyright 2014-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2014-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -69,7 +69,7 @@ struct x509_crl_method_st {
 };
 
 struct x509_lookup_method_st {
-    const char *name;
+    char *name;
     int (*new_item) (X509_LOOKUP *ctx);
     void (*free) (X509_LOOKUP *ctx);
     int (*init) (X509_LOOKUP *ctx);
@@ -93,7 +93,7 @@ struct x509_lookup_st {
     int init;                   /* have we been started */
     int skip;                   /* don't use us. */
     X509_LOOKUP_METHOD *method; /* the functions */
-    char *method_data;          /* method data */
+    void *method_data;          /* method data */
     X509_STORE *store_ctx;      /* who owns us */
 };
 

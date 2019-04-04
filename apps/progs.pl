@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
 # Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -45,7 +45,7 @@ print <<"EOF";
  *
  * Copyright 1995-$YEAR The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -111,7 +111,10 @@ my %md_disabler = (
 foreach my $cmd (
     "md2", "md4", "md5",
     "gost",
-    "sha1", "sha224", "sha256", "sha384", "sha512",
+    "sha1", "sha224", "sha256", "sha384",
+    "sha512", "sha512-224", "sha512-256",
+    "sha3-224", "sha3-256", "sha3-384", "sha3-512",
+    "shake128", "shake256",
     "mdc2", "rmd160", "blake2b512", "blake2s256",
     "sm3"
 ) {

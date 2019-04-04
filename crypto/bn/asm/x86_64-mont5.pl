@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
-# Copyright 2011-2016 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2011-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -423,18 +423,19 @@ $code.=<<___;
 	jnz	.Lsub
 
 	sbb	\$0,%rax		# handle upmost overflow bit
+	mov	\$-1,%rbx
+	xor	%rax,%rbx
 	xor	$i,$i
-	and	%rax,$ap
-	not	%rax
-	mov	$rp,$np
-	and	%rax,$np
 	mov	$num,$j			# j=num
-	or	$np,$ap			# ap=borrow?tp:rp
-.align	16
-.Lcopy:					# copy or in-place refresh
-	mov	($ap,$i,8),%rax
+
+.Lcopy:					# conditional copy
+	mov	($rp,$i,8),%rcx
+	mov	(%rsp,$i,8),%rdx
+	and	%rbx,%rcx
+	and	%rax,%rdx
 	mov	$i,(%rsp,$i,8)		# zap temporary vector
-	mov	%rax,($rp,$i,8)		# rp[i]=tp[i]
+	or	%rcx,%rdx
+	mov	%rdx,($rp,$i,8)		# rp[i]=tp[i]
 	lea	1($i),$i
 	sub	\$1,$j
 	jnz	.Lcopy
@@ -2909,6 +2910,7 @@ bn_powerx5:
 .align	32
 bn_sqrx8x_internal:
 __bn_sqrx8x_internal:
+.cfi_startproc
 	##################################################################
 	# Squaring part:
 	#
@@ -3541,6 +3543,7 @@ __bn_sqrx8x_reduction:
 	cmp	8+8(%rsp),%r8		# end of t[]?
 	jb	.Lsqrx8x_reduction_loop
 	ret
+.cfi_endproc
 .size	bn_sqrx8x_internal,.-bn_sqrx8x_internal
 ___
 }

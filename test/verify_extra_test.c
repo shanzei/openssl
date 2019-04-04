@@ -1,7 +1,7 @@
 /*
- * Copyright 2015-2017 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2015-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -138,15 +138,53 @@ static int test_alt_chains_cert_forgery(void)
     return ret;
 }
 
+static int test_store_ctx(void)
+{
+    X509_STORE_CTX *sctx = NULL;
+    X509 *x = NULL;
+    BIO *bio = NULL;
+    int testresult = 0, ret;
+
+    bio = BIO_new_file(bad_f, "r");
+    if (bio == NULL)
+        goto err;
+
+    x = PEM_read_bio_X509(bio, NULL, 0, NULL);
+    if (x == NULL)
+        goto err;
+
+    sctx = X509_STORE_CTX_new();
+    if (sctx == NULL)
+        goto err;
+
+    if (!X509_STORE_CTX_init(sctx, NULL, x, NULL))
+        goto err;
+
+    /* Verifying a cert where we have no trusted certs should fail */
+    ret = X509_verify_cert(sctx);
+
+    if (ret == 0) {
+        /* This is the result we were expecting: Test passed */
+        testresult = 1;
+    }
+
+ err:
+    X509_STORE_CTX_free(sctx);
+    X509_free(x);
+    BIO_free(bio);
+    return testresult;
+}
+
+OPT_TEST_DECLARE_USAGE("roots.pem untrusted.pem bad.pem\n")
+
 int setup_tests(void)
 {
     if (!TEST_ptr(roots_f = test_get_argument(0))
             || !TEST_ptr(untrusted_f = test_get_argument(1))
-            || !TEST_ptr(bad_f = test_get_argument(2))) {
-        TEST_error("usage: verify_extra_test roots.pem untrusted.pem bad.pem\n");
+            || !TEST_ptr(bad_f = test_get_argument(2)))
         return 0;
-    }
 
     ADD_TEST(test_alt_chains_cert_forgery);
+    ADD_TEST(test_store_ctx);
     return 1;
 }

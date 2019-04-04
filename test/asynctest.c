@@ -1,7 +1,7 @@
 /*
- * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2015-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -87,7 +87,7 @@ static int blockpause(void *args)
     return 1;
 }
 
-static int test_ASYNC_init_thread()
+static int test_ASYNC_init_thread(void)
 {
     ASYNC_JOB *job1 = NULL, *job2 = NULL, *job3 = NULL;
     int funcret1, funcret2, funcret3;
@@ -123,7 +123,44 @@ static int test_ASYNC_init_thread()
     return 1;
 }
 
-static int test_ASYNC_start_job()
+static int test_callback(void *arg)
+{
+    printf("callback test pass\n");
+    return 1;
+}
+
+static int test_ASYNC_callback_status(void)
+{
+    ASYNC_WAIT_CTX *waitctx = NULL;
+    int set_arg = 100;
+    ASYNC_callback_fn get_callback;
+    void *get_arg;
+    int set_status = 1;
+
+    if (       !ASYNC_init_thread(1, 0)
+            || (waitctx = ASYNC_WAIT_CTX_new()) == NULL
+            || ASYNC_WAIT_CTX_set_callback(waitctx, test_callback, (void*)&set_arg)
+               != 1
+            || ASYNC_WAIT_CTX_get_callback(waitctx, &get_callback, &get_arg)
+               != 1
+            || test_callback != get_callback
+            || get_arg != (void*)&set_arg
+            || (*get_callback)(get_arg) != 1
+            || ASYNC_WAIT_CTX_set_status(waitctx, set_status) != 1
+            || set_status != ASYNC_WAIT_CTX_get_status(waitctx)) {
+        fprintf(stderr, "test_ASYNC_callback_status() failed\n");
+        ASYNC_WAIT_CTX_free(waitctx);
+        ASYNC_cleanup_thread();
+        return 0;
+    }
+
+    ASYNC_WAIT_CTX_free(waitctx);
+    ASYNC_cleanup_thread();
+    return 1;
+
+}
+
+static int test_ASYNC_start_job(void)
 {
     ASYNC_JOB *job = NULL;
     int funcret;
@@ -151,7 +188,7 @@ static int test_ASYNC_start_job()
     return 1;
 }
 
-static int test_ASYNC_get_current_job()
+static int test_ASYNC_get_current_job(void)
 {
     ASYNC_JOB *job = NULL;
     int funcret;
@@ -178,7 +215,7 @@ static int test_ASYNC_get_current_job()
     return 1;
 }
 
-static int test_ASYNC_WAIT_CTX_get_all_fds()
+static int test_ASYNC_WAIT_CTX_get_all_fds(void)
 {
     ASYNC_JOB *job = NULL;
     int funcret;
@@ -245,7 +282,7 @@ static int test_ASYNC_WAIT_CTX_get_all_fds()
     return 1;
 }
 
-static int test_ASYNC_block_pause()
+static int test_ASYNC_block_pause(void)
 {
     ASYNC_JOB *job = NULL;
     int funcret;
@@ -279,6 +316,7 @@ int main(int argc, char **argv)
         CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
 
         if (       !test_ASYNC_init_thread()
+                || !test_ASYNC_callback_status()
                 || !test_ASYNC_start_job()
                 || !test_ASYNC_get_current_job()
                 || !test_ASYNC_WAIT_CTX_get_all_fds()

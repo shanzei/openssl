@@ -1,7 +1,7 @@
 /*
- * Copyright 2002-2017 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2002-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -142,6 +142,9 @@ int CONF_modules_load_file(const char *filename, const char *appname,
         OPENSSL_free(file);
     NCONF_free(conf);
 
+    if (flags & CONF_MFLAGS_IGNORE_RETURN_CODES)
+        return 1;
+
     return ret;
 }
 
@@ -232,9 +235,10 @@ static CONF_MODULE *module_add(DSO *dso, const char *name,
         supported_modules = sk_CONF_MODULE_new_null();
     if (supported_modules == NULL)
         return NULL;
-    tmod = OPENSSL_zalloc(sizeof(*tmod));
-    if (tmod == NULL)
+    if ((tmod = OPENSSL_zalloc(sizeof(*tmod))) == NULL) {
+        CONFerr(CONF_F_MODULE_ADD, ERR_R_MALLOC_FAILURE);
         return NULL;
+    }
 
     tmod->dso = dso;
     tmod->name = OPENSSL_strdup(name);
@@ -479,8 +483,7 @@ char *CONF_get1_default_config_file(void)
     char *file, *sep = "";
     int len;
 
-    file = getenv("OPENSSL_CONF");
-    if (file)
+    if ((file = ossl_safe_getenv("OPENSSL_CONF")) != NULL)
         return OPENSSL_strdup(file);
 
     len = strlen(X509_get_default_cert_area());

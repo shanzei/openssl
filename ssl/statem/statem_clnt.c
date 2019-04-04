@@ -3,7 +3,7 @@
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <assert.h>
 #include "../ssl_locl.h"
 #include "statem_locl.h"
 #include <openssl/buffer.h>
@@ -21,6 +22,8 @@
 #include <openssl/dh.h>
 #include <openssl/bn.h>
 #include <openssl/engine.h>
+#include <openssl/trace.h>
+#include <internal/cryptlib.h>
 
 static MSG_PROCESS_RETURN tls_process_as_hello_retry_request(SSL *s, PACKET *pkt);
 static MSG_PROCESS_RETURN tls_process_encrypted_extensions(SSL *s, PACKET *pkt);
@@ -161,7 +164,7 @@ static int ossl_statem_client13_read_transition(SSL *s, int mt)
             return 1;
         }
         if (mt == SSL3_MT_CERTIFICATE_REQUEST) {
-#if DTLS_MAX_VERSION != DTLS1_2_VERSION
+#if DTLS_MAX_VERSION_INTERNAL != DTLS1_2_VERSION
 # error TODO(DTLS1.3): Restore digest for PHA before adding message.
 #endif
             if (!SSL_IS_DTLS(s) && s->post_handshake_auth == SSL_PHA_EXT_SENT) {
@@ -374,6 +377,20 @@ int ossl_statem_client_read_transition(SSL *s, int mt)
 
  err:
     /* No valid transition found */
+    if (SSL_IS_DTLS(s) && mt == SSL3_MT_CHANGE_CIPHER_SPEC) {
+        BIO *rbio;
+
+        /*
+         * CCS messages don't have a message sequence number so this is probably
+         * because of an out-of-order CCS. We'll just drop it.
+         */
+        s->init_num = 0;
+        s->rwstate = SSL_READING;
+        rbio = SSL_get_rbio(s);
+        BIO_clear_retry_flags(rbio);
+        BIO_set_retry_read(rbio);
+        return 0;
+    }
     SSLfatal(s, SSL3_AD_UNEXPECTED_MESSAGE,
              SSL_F_OSSL_STATEM_CLIENT_READ_TRANSITION,
              SSL_R_UNEXPECTED_MESSAGE);
@@ -407,11 +424,19 @@ static WRITE_TRAN ossl_statem_client13_write_transition(SSL *s)
             st->hand_state = TLS_ST_CW_CERT;
             return WRITE_TRAN_CONTINUE;
         }
-        /* Shouldn't happen - same as default case */
-        SSLfatal(s, SSL_AD_INTERNAL_ERROR,
-                 SSL_F_OSSL_STATEM_CLIENT13_WRITE_TRANSITION,
-                 ERR_R_INTERNAL_ERROR);
-        return WRITE_TRAN_ERROR;
+        /*
+         * We should only get here if we received a CertificateRequest after
+         * we already sent close_notify
+         */
+        if (!ossl_assert((s->shutdown & SSL_SENT_SHUTDOWN) != 0)) {
+            /* Shouldn't happen - same as default case */
+            SSLfatal(s, SSL_AD_INTERNAL_ERROR,
+                     SSL_F_OSSL_STATEM_CLIENT13_WRITE_TRANSITION,
+                     ERR_R_INTERNAL_ERROR);
+            return WRITE_TRAN_ERROR;
+        }
+        st->hand_state = TLS_ST_OK;
+        return WRITE_TRAN_CONTINUE;
 
     case TLS_ST_CR_FINISHED:
         if (s->early_data_state == SSL_EARLY_DATA_WRITE_RETRY
@@ -1071,6 +1096,7 @@ WORK_STATE ossl_statem_client_post_process_message(SSL *s, WORK_STATE wst)
                  ERR_R_INTERNAL_ERROR);
         return WORK_ERROR;
 
+    case TLS_ST_CR_CERT_VRFY:
     case TLS_ST_CR_CERT_REQ:
         return tls_prepare_client_certificate(s, wst);
     }
@@ -1087,13 +1113,6 @@ int tls_construct_client_hello(SSL *s, WPACKET *pkt)
     SSL_SESSION *sess = s->session;
     unsigned char *session_id;
 
-    if (!WPACKET_set_max_size(pkt, SSL3_RT_MAX_PLAIN_LENGTH)) {
-        /* Should not happen */
-        SSLfatal(s, SSL_AD_INTERNAL_ERROR,
-                 SSL_F_TLS_CONSTRUCT_CLIENT_HELLO, ERR_R_INTERNAL_ERROR);
-        return 0;
-    }
-
     /* Work out what SSL/TLS/DTLS version to use */
     protverr = ssl_set_client_hello_version(s);
     if (protverr != 0) {
@@ -1103,7 +1122,7 @@ int tls_construct_client_hello(SSL *s, WPACKET *pkt)
     }
 
     if (sess == NULL
-            || !ssl_version_supported(s, sess->ssl_version)
+            || !ssl_version_supported(s, sess->ssl_version, NULL)
             || !SSL_SESSION_is_resumable(sess)) {
         if (s->hello_retry_request == SSL_HRR_NONE
                 && !ssl_get_new_session(s, 0)) {
@@ -1198,14 +1217,14 @@ int tls_construct_client_hello(SSL *s, WPACKET *pkt)
             sess_id_len = 0;
         }
     } else {
+        assert(s->session->session_id_length <= sizeof(s->session->session_id));
         sess_id_len = s->session->session_id_length;
         if (s->version == TLS1_3_VERSION) {
             s->tmp_session_id_len = sess_id_len;
             memcpy(s->tmp_session_id, s->session->session_id, sess_id_len);
         }
     }
-    if (sess_id_len > sizeof(s->session->session_id)
-            || !WPACKET_start_sub_packet_u8(pkt)
+    if (!WPACKET_start_sub_packet_u8(pkt)
             || (sess_id_len != 0 && !WPACKET_memcpy(pkt, session_id,
                                                     sess_id_len))
             || !WPACKET_close(pkt)) {
@@ -1393,7 +1412,6 @@ MSG_PROCESS_RETURN tls_process_server_hello(SSL *s, PACKET *pkt)
     unsigned int compression;
     unsigned int sversion;
     unsigned int context;
-    int discard;
     RAW_EXTENSION *extensions = NULL;
 #ifndef OPENSSL_NO_COMP
     SSL_COMP *comp;
@@ -1596,12 +1614,8 @@ MSG_PROCESS_RETURN tls_process_server_hello(SSL *s, PACKET *pkt)
          * so the PAC-based session secret is always preserved. It'll be
          * overwritten if the server refuses resumption.
          */
-        if (s->session->session_id_length > 0
-                || (SSL_IS_TLS13(s)
-                    && s->session->ext.tick_identity
-                       != TLSEXT_PSK_BAD_IDENTITY)) {
-            CRYPTO_atomic_add(&s->session_ctx->stats.sess_miss, 1, &discard,
-                              s->session_ctx->lock);
+        if (s->session->session_id_length > 0) {
+            tsan_counter(&s->session_ctx->stats.sess_miss);
             if (!ssl_get_new_session(s, 0)) {
                 /* SSLfatal() already called */
                 goto err;
@@ -1691,6 +1705,7 @@ MSG_PROCESS_RETURN tls_process_server_hello(SSL *s, PACKET *pkt)
     if (SSL_IS_DTLS(s) && s->hit) {
         unsigned char sctpauthkey[64];
         char labelbuffer[sizeof(DTLS1_SCTP_AUTH_LABEL)];
+        size_t labellen;
 
         /*
          * Add new shared key for SCTP-Auth, will be ignored if
@@ -1699,10 +1714,15 @@ MSG_PROCESS_RETURN tls_process_server_hello(SSL *s, PACKET *pkt)
         memcpy(labelbuffer, DTLS1_SCTP_AUTH_LABEL,
                sizeof(DTLS1_SCTP_AUTH_LABEL));
 
+        /* Don't include the terminating zero. */
+        labellen = sizeof(labelbuffer) - 1;
+        if (s->mode & SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG)
+            labellen += 1;
+
         if (SSL_export_keying_material(s, sctpauthkey,
                                        sizeof(sctpauthkey),
                                        labelbuffer,
-                                       sizeof(labelbuffer), NULL, 0, 0) <= 0) {
+                                       labellen, NULL, 0, 0) <= 0) {
             SSLfatal(s, SSL_AD_INTERNAL_ERROR, SSL_F_TLS_PROCESS_SERVER_HELLO,
                      ERR_R_INTERNAL_ERROR);
             goto err;
@@ -1897,7 +1917,7 @@ MSG_PROCESS_RETURN tls_process_server_certificate(SSL *s, PACKET *pkt)
      * set. The *documented* interface remains the same.
      */
     if (s->verify_mode != SSL_VERIFY_NONE && i <= 0) {
-        SSLfatal(s, ssl_verify_alarm_type(s->verify_result),
+        SSLfatal(s, ssl_x509err2alert(s->verify_result),
                  SSL_F_TLS_PROCESS_SERVER_CERTIFICATE,
                  SSL_R_CERTIFICATE_VERIFY_FAILED);
         goto err;
@@ -2191,7 +2211,8 @@ static int tls_process_ske_ecdhe(SSL *s, PACKET *pkt, EVP_PKEY **pkey)
      * Check curve is named curve type and one of our preferences, if not
      * server has sent an invalid curve.
      */
-    if (curve_type != NAMED_CURVE_TYPE || !tls1_check_group_id(s, curve_id)) {
+    if (curve_type != NAMED_CURVE_TYPE
+            || !tls1_check_group_id(s, curve_id, 1)) {
         SSLfatal(s, SSL_AD_ILLEGAL_PARAMETER, SSL_F_TLS_PROCESS_SKE_ECDHE,
                  SSL_R_WRONG_CURVE);
         return 0;
@@ -2327,10 +2348,9 @@ MSG_PROCESS_RETURN tls_process_key_exchange(SSL *s, PACKET *pkt)
                      ERR_R_INTERNAL_ERROR);
             goto err;
         }
-#ifdef SSL_DEBUG
         if (SSL_USE_SIGALGS(s))
-            fprintf(stderr, "USING TLSv1.2 HASH %s\n", EVP_MD_name(md));
-#endif
+            OSSL_TRACE1(TLS, "USING TLSv1.2 HASH %s\n",
+                        md == NULL ? "n/a" : EVP_MD_name(md));
 
         if (!PACKET_get_length_prefixed_2(pkt, &signature)
             || PACKET_remaining(pkt) != 0) {
@@ -2430,6 +2450,15 @@ MSG_PROCESS_RETURN tls_process_certificate_request(SSL *s, PACKET *pkt)
     if (SSL_IS_TLS13(s)) {
         PACKET reqctx, extensions;
         RAW_EXTENSION *rawexts = NULL;
+
+        if ((s->shutdown & SSL_SENT_SHUTDOWN) != 0) {
+            /*
+             * We already sent close_notify. This can only happen in TLSv1.3
+             * post-handshake messages. We can't reasonably respond to this, so
+             * we just ignore it
+             */
+            return MSG_PROCESS_FINISHED_READING;
+        }
 
         /* Free and zero certificate types: it is not present in TLS 1.3 */
         OPENSSL_free(s->s3->tmp.ctype);
@@ -2531,6 +2560,17 @@ MSG_PROCESS_RETURN tls_process_certificate_request(SSL *s, PACKET *pkt)
     /* we should setup a certificate to return.... */
     s->s3->tmp.cert_req = 1;
 
+    /*
+     * In TLSv1.3 we don't prepare the client certificate yet. We wait until
+     * after the CertificateVerify message has been received. This is because
+     * in TLSv1.3 the CertificateRequest arrives before the Certificate message
+     * but in TLSv1.2 it is the other way around. We want to make sure that
+     * SSL_get_peer_certificate() returns something sensible in
+     * client_cert_cb.
+     */
+    if (SSL_IS_TLS13(s) && s->post_handshake_auth != SSL_PHA_REQUESTED)
+        return MSG_PROCESS_CONTINUE_READING;
+
     return MSG_PROCESS_CONTINUE_PROCESSING;
 }
 
@@ -2542,16 +2582,15 @@ MSG_PROCESS_RETURN tls_process_new_session_ticket(SSL *s, PACKET *pkt)
     RAW_EXTENSION *exts = NULL;
     PACKET nonce;
 
+    PACKET_null_init(&nonce);
+
     if (!PACKET_get_net_4(pkt, &ticket_lifetime_hint)
         || (SSL_IS_TLS13(s)
             && (!PACKET_get_net_4(pkt, &age_add)
-                || !PACKET_get_length_prefixed_1(pkt, &nonce)
-                || !PACKET_memdup(&nonce, &s->session->ext.tick_nonce,
-                                  &s->session->ext.tick_nonce_len)))
+                || !PACKET_get_length_prefixed_1(pkt, &nonce)))
         || !PACKET_get_net_2(pkt, &ticklen)
-        || (!SSL_IS_TLS13(s) && PACKET_remaining(pkt) != ticklen)
-        || (SSL_IS_TLS13(s)
-            && (ticklen == 0 || PACKET_remaining(pkt) < ticklen))) {
+        || (SSL_IS_TLS13(s) ? (ticklen == 0 || PACKET_remaining(pkt) < ticklen)
+                            : PACKET_remaining(pkt) != ticklen)) {
         SSLfatal(s, SSL_AD_DECODE_ERROR, SSL_F_TLS_PROCESS_NEW_SESSION_TICKET,
                  SSL_R_LENGTH_MISMATCH);
         goto err;
@@ -2574,8 +2613,8 @@ MSG_PROCESS_RETURN tls_process_new_session_ticket(SSL *s, PACKET *pkt)
      * cache.
      */
     if (SSL_IS_TLS13(s) || s->session->session_id_length > 0) {
-        int i = s->session_ctx->session_cache_mode;
         SSL_SESSION *new_sess;
+
         /*
          * We reused an existing session, so we need to replace it with a new
          * one
@@ -2587,9 +2626,12 @@ MSG_PROCESS_RETURN tls_process_new_session_ticket(SSL *s, PACKET *pkt)
             goto err;
         }
 
-        if (i & SSL_SESS_CACHE_CLIENT) {
+        if ((s->session_ctx->session_cache_mode & SSL_SESS_CACHE_CLIENT) != 0
+                && !SSL_IS_TLS13(s)) {
             /*
-             * Remove the old session from the cache. We carry on if this fails
+             * In TLSv1.2 and below the arrival of a new tickets signals that
+             * any old ticket we were using is now out of date, so we remove the
+             * old session from the cache. We carry on if this fails
              */
             SSL_CTX_remove_session(s->session_ctx, s->session);
         }
@@ -2628,10 +2670,16 @@ MSG_PROCESS_RETURN tls_process_new_session_ticket(SSL *s, PACKET *pkt)
         PACKET extpkt;
 
         if (!PACKET_as_length_prefixed_2(pkt, &extpkt)
-                || PACKET_remaining(pkt) != 0
-                || !tls_collect_extensions(s, &extpkt,
-                                           SSL_EXT_TLS1_3_NEW_SESSION_TICKET,
-                                           &exts, NULL, 1)
+                || PACKET_remaining(pkt) != 0) {
+            SSLfatal(s, SSL_AD_DECODE_ERROR,
+                     SSL_F_TLS_PROCESS_NEW_SESSION_TICKET,
+                     SSL_R_LENGTH_MISMATCH);
+            goto err;
+        }
+
+        if (!tls_collect_extensions(s, &extpkt,
+                                    SSL_EXT_TLS1_3_NEW_SESSION_TICKET, &exts,
+                                    NULL, 1)
                 || !tls_parse_all_extensions(s,
                                              SSL_EXT_TLS1_3_NEW_SESSION_TICKET,
                                              exts, NULL, 0, 1)) {
@@ -2663,9 +2711,36 @@ MSG_PROCESS_RETURN tls_process_new_session_ticket(SSL *s, PACKET *pkt)
         goto err;
     }
     s->session->session_id_length = sess_len;
+    s->session->not_resumable = 0;
 
     /* This is a standalone message in TLSv1.3, so there is no more to read */
     if (SSL_IS_TLS13(s)) {
+        const EVP_MD *md = ssl_handshake_md(s);
+        int hashleni = EVP_MD_size(md);
+        size_t hashlen;
+        static const unsigned char nonce_label[] = "resumption";
+
+        /* Ensure cast to size_t is safe */
+        if (!ossl_assert(hashleni >= 0)) {
+            SSLfatal(s, SSL_AD_INTERNAL_ERROR,
+                     SSL_F_TLS_PROCESS_NEW_SESSION_TICKET,
+                     ERR_R_INTERNAL_ERROR);
+            goto err;
+        }
+        hashlen = (size_t)hashleni;
+
+        if (!tls13_hkdf_expand(s, md, s->resumption_master_secret,
+                               nonce_label,
+                               sizeof(nonce_label) - 1,
+                               PACKET_data(&nonce),
+                               PACKET_remaining(&nonce),
+                               s->session->master_key,
+                               hashlen, 1)) {
+            /* SSLfatal() already called */
+            goto err;
+        }
+        s->session->master_key_length = hashlen;
+
         OPENSSL_free(exts);
         ssl_update_cache(s, SSL_SESS_CACHE_CLIENT);
         return MSG_PROCESS_FINISHED_READING;
@@ -3324,6 +3399,7 @@ int tls_client_key_exchange_post_work(SSL *s)
     if (SSL_IS_DTLS(s)) {
         unsigned char sctpauthkey[64];
         char labelbuffer[sizeof(DTLS1_SCTP_AUTH_LABEL)];
+        size_t labellen;
 
         /*
          * Add new shared key for SCTP-Auth, will be ignored if no SCTP
@@ -3332,9 +3408,14 @@ int tls_client_key_exchange_post_work(SSL *s)
         memcpy(labelbuffer, DTLS1_SCTP_AUTH_LABEL,
                sizeof(DTLS1_SCTP_AUTH_LABEL));
 
+        /* Don't include the terminating zero. */
+        labellen = sizeof(labelbuffer) - 1;
+        if (s->mode & SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG)
+            labellen += 1;
+
         if (SSL_export_keying_material(s, sctpauthkey,
                                        sizeof(sctpauthkey), labelbuffer,
-                                       sizeof(labelbuffer), NULL, 0, 0) <= 0) {
+                                       labellen, NULL, 0, 0) <= 0) {
             SSLfatal(s, SSL_AD_INTERNAL_ERROR,
                      SSL_F_TLS_CLIENT_KEY_EXCHANGE_POST_WORK,
                      ERR_R_INTERNAL_ERROR);

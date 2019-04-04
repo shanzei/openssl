@@ -1,7 +1,7 @@
 /*
  * Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -66,18 +66,18 @@ void BIO_ADDR_clear(BIO_ADDR *ap)
 int BIO_ADDR_make(BIO_ADDR *ap, const struct sockaddr *sa)
 {
     if (sa->sa_family == AF_INET) {
-        ap->s_in = *(const struct sockaddr_in *)sa;
+        memcpy(&(ap->s_in), sa, sizeof(struct sockaddr_in));
         return 1;
     }
 #ifdef AF_INET6
     if (sa->sa_family == AF_INET6) {
-        ap->s_in6 = *(const struct sockaddr_in6 *)sa;
+        memcpy(&(ap->s_in6), sa, sizeof(struct sockaddr_in6));
         return 1;
     }
 #endif
 #ifdef AF_UNIX
     if (sa->sa_family == AF_UNIX) {
-        ap->s_un = *(const struct sockaddr_un *)sa;
+        memcpy(&(ap->s_un), sa, sizeof(struct sockaddr_un));
         return 1;
     }
 #endif
@@ -565,9 +565,10 @@ static int addrinfo_wrap(int family, int socktype,
                          unsigned short port,
                          BIO_ADDRINFO **bai)
 {
-    *bai = OPENSSL_zalloc(sizeof(**bai));
-    if (*bai == NULL)
+    if ((*bai = OPENSSL_zalloc(sizeof(**bai))) == NULL) {
+        BIOerr(BIO_F_ADDRINFO_WRAP, ERR_R_MALLOC_FAILURE);
         return 0;
+    }
 
     (*bai)->bai_family = family;
     (*bai)->bai_socktype = socktype;
@@ -602,7 +603,8 @@ static int addrinfo_wrap(int family, int socktype,
 
 DEFINE_RUN_ONCE_STATIC(do_bio_lookup_init)
 {
-    OPENSSL_init_crypto(0, NULL);
+    if (!OPENSSL_init_crypto(0, NULL))
+        return 0;
     bio_lookup_lock = CRYPTO_THREAD_lock_new();
     return bio_lookup_lock != NULL;
 }
@@ -681,6 +683,12 @@ int BIO_lookup_ex(const char *host, const char *service, int lookup_type,
         hints.ai_family = family;
         hints.ai_socktype = socktype;
         hints.ai_protocol = protocol;
+#ifdef AI_ADDRCONFIG
+#ifdef AF_UNSPEC
+        if (family == AF_UNSPEC)
+#endif
+            hints.ai_flags |= AI_ADDRCONFIG;
+#endif
 
         if (lookup_type == BIO_LOOKUP_SERVER)
             hints.ai_flags |= AI_PASSIVE;
@@ -780,7 +788,12 @@ int BIO_lookup_ex(const char *host, const char *service, int lookup_type,
                  * anyway [above getaddrinfo/gai_strerror is]. We just let
                  * system administrator figure this out...
                  */
+# if defined(OPENSSL_SYS_VXWORKS)
+                /* h_errno doesn't exist on VxWorks */
+                SYSerr(SYS_F_GETHOSTBYNAME, 1000 );
+# else
                 SYSerr(SYS_F_GETHOSTBYNAME, 1000 + h_errno);
+# endif
 #else
                 SYSerr(SYS_F_GETHOSTBYNAME, WSAGetLastError());
 #endif

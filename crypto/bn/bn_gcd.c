@@ -1,7 +1,7 @@
 /*
- * Copyright 1995-2017 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -140,7 +140,14 @@ BIGNUM *int_bn_mod_inverse(BIGNUM *in,
     BIGNUM *ret = NULL;
     int sign;
 
-    if (pnoinv)
+    /* This is invalid input so we don't worry about constant time here */
+    if (BN_abs_is_word(n, 1) || BN_is_zero(n)) {
+        if (pnoinv != NULL)
+            *pnoinv = 1;
+        return NULL;
+    }
+
+    if (pnoinv != NULL)
         *pnoinv = 0;
 
     if ((BN_get_flags(a, BN_FLG_CONSTTIME) != 0)

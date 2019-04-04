@@ -1,8 +1,8 @@
 /*
- * Copyright 2013-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2013-2018 The OpenSSL Project Authors. All Rights Reserved.
  * Copyright (c) 2012, Intel Corporation. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -28,7 +28,7 @@ void RSAZ_1024_mod_exp_avx2(BN_ULONG result[16],
                             const BN_ULONG exponent[16],
                             const BN_ULONG m_norm[16], const BN_ULONG RR[16],
                             BN_ULONG k0);
-int rsaz_avx2_eligible();
+int rsaz_avx2_eligible(void);
 
 void RSAZ_512_mod_exp(BN_ULONG result[8],
                       const BN_ULONG base_norm[8], const BN_ULONG exponent[8],

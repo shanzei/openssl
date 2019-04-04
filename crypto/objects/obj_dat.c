@@ -1,7 +1,7 @@
 /*
  * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -350,7 +350,7 @@ int OBJ_obj2nid(const ASN1_OBJECT *a)
 ASN1_OBJECT *OBJ_txt2obj(const char *s, int no_name)
 {
     int nid = NID_undef;
-    ASN1_OBJECT *op = NULL;
+    ASN1_OBJECT *op;
     unsigned char *buf;
     unsigned char *p;
     const unsigned char *cp;
@@ -376,8 +376,10 @@ ASN1_OBJECT *OBJ_txt2obj(const char *s, int no_name)
     if (j < 0)
         return NULL;
 
-    if ((buf = OPENSSL_malloc(j)) == NULL)
+    if ((buf = OPENSSL_malloc(j)) == NULL) {
+        OBJerr(OBJ_F_OBJ_TXT2OBJ, ERR_R_MALLOC_FAILURE);
         return NULL;
+    }
 
     p = buf;
     /* Write out tag+length */

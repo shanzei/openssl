@@ -3,7 +3,7 @@
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -192,8 +192,10 @@ static int psk_find_session_cb(SSL *ssl, const unsigned char *identity,
     const SSL_CIPHER *cipher = NULL;
 
     if (strlen(psk_identity) != identity_len
-            || memcmp(psk_identity, identity, identity_len) != 0)
-        return 0;
+            || memcmp(psk_identity, identity, identity_len) != 0) {
+        *sess = NULL;
+        return 1;
+    }
 
     if (psksess != NULL) {
         SSL_SESSION_up_ref(psksess);
@@ -212,6 +214,7 @@ static int psk_find_session_cb(SSL *ssl, const unsigned char *identity,
     cipher = SSL_CIPHER_find(ssl, tls13_aes128gcmsha256_id);
     if (cipher == NULL) {
         BIO_printf(bio_err, "Error finding suitable ciphersuite\n");
+        OPENSSL_free(key);
         return 0;
     }
 
@@ -747,7 +750,8 @@ typedef enum OPTION_choice {
     OPT_ID_PREFIX, OPT_SERVERNAME, OPT_SERVERNAME_FATAL,
     OPT_CERT2, OPT_KEY2, OPT_NEXTPROTONEG, OPT_ALPN,
     OPT_SRTP_PROFILES, OPT_KEYMATEXPORT, OPT_KEYMATEXPORTLEN,
-    OPT_KEYLOG_FILE, OPT_MAX_EARLY, OPT_EARLY_DATA,
+    OPT_KEYLOG_FILE, OPT_MAX_EARLY, OPT_RECV_MAX_EARLY, OPT_EARLY_DATA,
+    OPT_S_NUM_TICKETS, OPT_ANTI_REPLAY, OPT_NO_ANTI_REPLAY, OPT_SCTP_LABEL_BUG,
     OPT_R_ENUM,
     OPT_S_ENUM,
     OPT_V_ENUM,
@@ -934,6 +938,7 @@ const OPTIONS s_server_options[] = {
 #endif
 #ifndef OPENSSL_NO_SCTP
     {"sctp", OPT_SCTP, '-', "Use SCTP"},
+    {"sctp_label_bug", OPT_SCTP_LABEL_BUG, '-', "Enable SCTP label length bug"},
 #endif
 #ifndef OPENSSL_NO_DH
     {"no_dhe", OPT_NO_DHE, '-', "Disable ephemeral DH"},
@@ -953,8 +958,14 @@ const OPTIONS s_server_options[] = {
 #endif
     {"keylogfile", OPT_KEYLOG_FILE, '>', "Write TLS secrets to file"},
     {"max_early_data", OPT_MAX_EARLY, 'n',
-     "The maximum number of bytes of early data"},
+     "The maximum number of bytes of early data as advertised in tickets"},
+    {"recv_max_early_data", OPT_RECV_MAX_EARLY, 'n',
+     "The maximum number of bytes of early data (hard limit)"},
     {"early_data", OPT_EARLY_DATA, '-', "Attempt to read early data"},
+    {"num_tickets", OPT_S_NUM_TICKETS, 'n',
+     "The number of TLSv1.3 session tickets that a server will automatically  issue" },
+    {"anti_replay", OPT_ANTI_REPLAY, '-', "Switch on anti-replay protection (default)"},
+    {"no_anti_replay", OPT_NO_ANTI_REPLAY, '-', "Switch off anti-replay protection"},
     {NULL, OPT_EOF, 0, NULL}
 };
 
@@ -1018,7 +1029,9 @@ int s_server_main(int argc, char *argv[])
     char *srpuserseed = NULL;
     char *srp_verifier_file = NULL;
 #endif
+#ifndef OPENSSL_NO_SRTP
     char *srtp_profiles = NULL;
+#endif
     int min_version = 0, max_version = 0, prot_opt = 0, no_prot_opt = 0;
     int s_server_verify = SSL_VERIFY_NONE;
     int s_server_session_id_context = 1; /* anything will do */
@@ -1033,8 +1046,11 @@ int s_server_main(int argc, char *argv[])
     unsigned int split_send_fragment = 0, max_pipelines = 0;
     const char *s_serverinfo_file = NULL;
     const char *keylog_file = NULL;
-    int max_early_data = -1;
+    int max_early_data = -1, recv_max_early_data = -1;
     char *psksessf = NULL;
+#ifndef OPENSSL_NO_SCTP
+    int sctp_label_bug = 0;
+#endif
 
     /* Init of few remaining global variables */
     local_argc = argc;
@@ -1252,6 +1268,9 @@ int s_server_main(int argc, char *argv[])
                 goto opthelp;
             break;
         case OPT_S_CASES:
+        case OPT_S_NUM_TICKETS:
+        case OPT_ANTI_REPLAY:
+        case OPT_NO_ANTI_REPLAY:
             if (ssl_args == NULL)
                 ssl_args = sk_OPENSSL_STRING_new_null();
             if (ssl_args == NULL
@@ -1392,7 +1411,7 @@ int s_server_main(int argc, char *argv[])
             for (p = psk_key = opt_arg(); *p; p++) {
                 if (isxdigit(_UC(*p)))
                     continue;
-                BIO_printf(bio_err, "Not a hex number '%s'\n", *argv);
+                BIO_printf(bio_err, "Not a hex number '%s'\n", psk_key);
                 goto end;
             }
             break;
@@ -1475,6 +1494,11 @@ int s_server_main(int argc, char *argv[])
             protocol = IPPROTO_SCTP;
 #endif
             break;
+        case OPT_SCTP_LABEL_BUG:
+#ifndef OPENSSL_NO_SCTP
+            sctp_label_bug = 1;
+#endif
+            break;
         case OPT_TIMEOUT:
 #ifndef OPENSSL_NO_DTLS
             enable_timeouts = 1;
@@ -1524,7 +1548,9 @@ int s_server_main(int argc, char *argv[])
             alpn_in = opt_arg();
             break;
         case OPT_SRTP_PROFILES:
+#ifndef OPENSSL_NO_SRTP
             srtp_profiles = opt_arg();
+#endif
             break;
         case OPT_KEYMATEXPORT:
             keymatexportlabel = opt_arg();
@@ -1554,6 +1580,13 @@ int s_server_main(int argc, char *argv[])
             max_early_data = atoi(opt_arg());
             if (max_early_data < 0) {
                 BIO_printf(bio_err, "Invalid value for max_early_data\n");
+                goto end;
+            }
+            break;
+        case OPT_RECV_MAX_EARLY:
+            recv_max_early_data = atoi(opt_arg());
+            if (recv_max_early_data < 0) {
+                BIO_printf(bio_err, "Invalid value for recv_max_early_data\n");
                 goto end;
             }
             break;
@@ -1597,6 +1630,11 @@ int s_server_main(int argc, char *argv[])
         goto end;
     }
 #endif
+    if (early_data && (www > 0 || rev)) {
+        BIO_printf(bio_err,
+                   "Can't use -early_data in combination with -www, -WWW, -HTTP, or -rev\n");
+        goto end;
+    }
 
 #ifndef OPENSSL_NO_SCTP
     if (protocol == IPPROTO_SCTP) {
@@ -1746,6 +1784,9 @@ int s_server_main(int argc, char *argv[])
         ERR_print_errors(bio_err);
         goto end;
     }
+
+    SSL_CTX_clear_mode(ctx, SSL_MODE_AUTO_RETRY);
+
     if (sdebug)
         ssl_ctx_security_debug(ctx, sdebug);
 
@@ -1760,6 +1801,12 @@ int s_server_main(int argc, char *argv[])
             goto end;
         }
     }
+
+#ifndef OPENSSL_NO_SCTP
+    if (protocol == IPPROTO_SCTP && sctp_label_bug == 1)
+        SSL_CTX_set_mode(ctx, SSL_MODE_DTLS_SCTP_LABEL_LENGTH_BUG);
+#endif
+
     if (min_version != 0
         && SSL_CTX_set_min_proto_version(ctx, min_version) == 0)
         goto end;
@@ -2094,9 +2141,9 @@ int s_server_main(int argc, char *argv[])
 
     if (max_early_data >= 0)
         SSL_CTX_set_max_early_data(ctx, max_early_data);
+    if (recv_max_early_data >= 0)
+        SSL_CTX_set_recv_max_early_data(ctx, recv_max_early_data);
 
-    BIO_printf(bio_s_out, "ACCEPT\n");
-    (void)BIO_flush(bio_s_out);
     if (rev)
         server_cb = rev_body;
     else if (www)
@@ -2109,7 +2156,7 @@ int s_server_main(int argc, char *argv[])
         unlink(host);
 #endif
     do_server(&accept_socket, host, port, socket_family, socket_type, protocol,
-              server_cb, context, naccept);
+              server_cb, context, naccept, bio_s_out);
     print_stats(bio_s_out, ctx);
     ret = 0;
  end:
@@ -2191,9 +2238,7 @@ static int sv_body(int s, int stype, int prot, unsigned char *context)
     SSL *con = NULL;
     BIO *sbio;
     struct timeval timeout;
-#if defined(OPENSSL_SYS_WINDOWS) || defined(OPENSSL_SYS_MSDOS)
-    struct timeval tv;
-#else
+#if !(defined(OPENSSL_SYS_WINDOWS) || defined(OPENSSL_SYS_MSDOS))
     struct timeval *timeoutp;
 #endif
 #ifndef OPENSSL_NO_DTLS
@@ -2394,26 +2439,23 @@ static int sv_body(int s, int stype, int prot, unsigned char *context)
              * second and check for any keypress. In a proper Windows
              * application we wouldn't do this because it is inefficient.
              */
-            tv.tv_sec = 1;
-            tv.tv_usec = 0;
-            i = select(width, (void *)&readfds, NULL, NULL, &tv);
+            timeout.tv_sec = 1;
+            timeout.tv_usec = 0;
+            i = select(width, (void *)&readfds, NULL, NULL, &timeout);
             if (has_stdin_waiting())
                 read_from_terminal = 1;
             if ((i < 0) || (!i && !read_from_terminal))
                 continue;
 #else
-            if ((SSL_version(con) == DTLS1_VERSION) &&
-                DTLSv1_get_timeout(con, &timeout))
+            if (SSL_is_dtls(con) && DTLSv1_get_timeout(con, &timeout))
                 timeoutp = &timeout;
             else
                 timeoutp = NULL;
 
             i = select(width, (void *)&readfds, NULL, NULL, timeoutp);
 
-            if ((SSL_version(con) == DTLS1_VERSION)
-                && DTLSv1_handle_timeout(con) > 0) {
+            if ((SSL_is_dtls(con)) && DTLSv1_handle_timeout(con) > 0)
                 BIO_printf(bio_err, "TIMEOUT occurred\n");
-            }
 
             if (i <= 0)
                 continue;
@@ -2465,14 +2507,6 @@ static int sv_body(int s, int stype, int prot, unsigned char *context)
                      */
                     goto err;
                 }
-#ifndef OPENSSL_NO_HEARTBEATS
-                if ((buf[0] == 'B') && ((buf[1] == '\n') || (buf[1] == '\r'))) {
-                    BIO_printf(bio_err, "HEARTBEATING\n");
-                    SSL_heartbeat(con);
-                    i = 0;
-                    continue;
-                }
-#endif
                 if ((buf[0] == 'r') && ((buf[1] == '\n') || (buf[1] == '\r'))) {
                     SSL_renegotiate(con);
                     i = SSL_do_handshake(con);
@@ -2673,9 +2707,6 @@ static int sv_body(int s, int stype, int prot, unsigned char *context)
     }
     BIO_printf(bio_s_out, "CONNECTION CLOSED\n");
     OPENSSL_clear_free(buf, bufsize);
-    if (ret >= 0)
-        BIO_printf(bio_s_out, "ACCEPT\n");
-    (void)BIO_flush(bio_s_out);
     return ret;
 }
 
@@ -2730,6 +2761,8 @@ static int init_ssl_connection(SSL *con)
                     BIO_ADDR_free(client);
                     return 0;
                 }
+
+                (void)BIO_ctrl_set_connected(wbio, client);
                 BIO_ADDR_free(client);
                 dtlslisten = 0;
             } else {
@@ -2885,6 +2918,12 @@ static void print_connection_info(SSL *con)
         }
         OPENSSL_free(exportedkeymat);
     }
+#ifndef OPENSSL_NO_KTLS
+    if (BIO_get_ktls_send(SSL_get_wbio(con)))
+        BIO_printf(bio_err, "Using Kernel TLS for sending\n");
+    if (BIO_get_ktls_recv(SSL_get_rbio(con)))
+        BIO_printf(bio_err, "Using Kernel TLS for receiving\n");
+#endif
 
     (void)BIO_flush(bio_s_out);
 }
@@ -2948,8 +2987,10 @@ static int www_body(int s, int stype, int prot, unsigned char *context)
 
     if (context != NULL
         && !SSL_set_session_id_context(con, context,
-                                       strlen((char *)context)))
+                                       strlen((char *)context))) {
+        SSL_free(con);
         goto err;
+    }
 
     sbio = BIO_new_socket(s, BIO_NOCLOSE);
     if (s_nbio_test) {
@@ -2961,7 +3002,7 @@ static int www_body(int s, int stype, int prot, unsigned char *context)
     SSL_set_bio(con, sbio, sbio);
     SSL_set_accept_state(con);
 
-    /* SSL_set_fd(con,s); */
+    /* No need to free |con| after this. Done by BIO_free(ssl_bio) */
     BIO_set_ssl(ssl_bio, con, BIO_CLOSE);
     BIO_push(io, ssl_bio);
 #ifdef CHARSET_EBCDIC
@@ -3284,8 +3325,6 @@ static int www_body(int s, int stype, int prot, unsigned char *context)
     SSL_set_shutdown(con, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
 
  err:
-    if (ret >= 0)
-        BIO_printf(bio_s_out, "ACCEPT\n");
     OPENSSL_free(buf);
     BIO_free_all(io);
     return ret;
@@ -3319,6 +3358,7 @@ static int rev_body(int s, int stype, int prot, unsigned char *context)
     if (context != NULL
         && !SSL_set_session_id_context(con, context,
                                        strlen((char *)context))) {
+        SSL_free(con);
         ERR_print_errors(bio_err);
         goto err;
     }
@@ -3327,6 +3367,7 @@ static int rev_body(int s, int stype, int prot, unsigned char *context)
     SSL_set_bio(con, sbio, sbio);
     SSL_set_accept_state(con);
 
+    /* No need to free |con| after this. Done by BIO_free(ssl_bio) */
     BIO_set_ssl(ssl_bio, con, BIO_CLOSE);
     BIO_push(io, ssl_bio);
 #ifdef CHARSET_EBCDIC

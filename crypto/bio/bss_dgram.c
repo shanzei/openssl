@@ -1,7 +1,7 @@
 /*
  * Copyright 2005-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -364,7 +364,7 @@ static long dgram_get_mtu_overhead(bio_dgram_data *data)
          */
         ret = 28;
         break;
-# ifdef AF_INET6
+# if OPENSSL_USE_IPV6
     case AF_INET6:
         {
 #  ifdef IN6_IS_ADDR_V4MAPPED
@@ -955,9 +955,10 @@ static int dgram_sctp_new(BIO *bi)
 
     bi->init = 0;
     bi->num = 0;
-    data = OPENSSL_zalloc(sizeof(*data));
-    if (data == NULL)
+    if ((data = OPENSSL_zalloc(sizeof(*data))) == NULL) {
+        BIOerr(BIO_F_DGRAM_SCTP_NEW, ERR_R_MALLOC_FAILURE);
         return 0;
+    }
 #  ifdef SCTP_PR_SCTP_NONE
     data->prinfo.pr_policy = SCTP_PR_SCTP_NONE;
 #  endif

@@ -1,7 +1,7 @@
 /*
  * Copyright 2016-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -406,8 +406,7 @@ static int test_handshake(int idx)
 #ifndef OPENSSL_NO_DTLS
     if (test_ctx->method == SSL_TEST_METHOD_DTLS) {
         server_ctx = SSL_CTX_new(DTLS_server_method());
-        if (!TEST_true(SSL_CTX_set_max_proto_version(server_ctx,
-                                                     DTLS_MAX_VERSION)))
+        if (!TEST_true(SSL_CTX_set_max_proto_version(server_ctx, 0)))
             goto err;
         if (test_ctx->extra.server.servername_callback !=
             SSL_TEST_SERVERNAME_CB_NONE) {
@@ -415,17 +414,14 @@ static int test_handshake(int idx)
                 goto err;
         }
         client_ctx = SSL_CTX_new(DTLS_client_method());
-        if (!TEST_true(SSL_CTX_set_max_proto_version(client_ctx,
-                                                     DTLS_MAX_VERSION)))
+        if (!TEST_true(SSL_CTX_set_max_proto_version(client_ctx, 0)))
             goto err;
         if (test_ctx->handshake_mode == SSL_TEST_HANDSHAKE_RESUME) {
             resume_server_ctx = SSL_CTX_new(DTLS_server_method());
-            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_server_ctx,
-                                                         DTLS_MAX_VERSION)))
+            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_server_ctx, 0)))
                 goto err;
             resume_client_ctx = SSL_CTX_new(DTLS_client_method());
-            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_client_ctx,
-                                                         DTLS_MAX_VERSION)))
+            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_client_ctx, 0)))
                 goto err;
             if (!TEST_ptr(resume_server_ctx)
                     || !TEST_ptr(resume_client_ctx))
@@ -435,37 +431,37 @@ static int test_handshake(int idx)
 #endif
     if (test_ctx->method == SSL_TEST_METHOD_TLS) {
         server_ctx = SSL_CTX_new(TLS_server_method());
-        if (!TEST_true(SSL_CTX_set_max_proto_version(server_ctx,
-                                                     TLS_MAX_VERSION)))
+        if (!TEST_true(SSL_CTX_set_max_proto_version(server_ctx, 0)))
             goto err;
         /* SNI on resumption isn't supported/tested yet. */
         if (test_ctx->extra.server.servername_callback !=
             SSL_TEST_SERVERNAME_CB_NONE) {
             if (!TEST_ptr(server2_ctx = SSL_CTX_new(TLS_server_method())))
                 goto err;
-            if (!TEST_true(SSL_CTX_set_max_proto_version(server2_ctx,
-                                                         TLS_MAX_VERSION)))
+            if (!TEST_true(SSL_CTX_set_max_proto_version(server2_ctx, 0)))
                 goto err;
         }
         client_ctx = SSL_CTX_new(TLS_client_method());
-        if (!TEST_true(SSL_CTX_set_max_proto_version(client_ctx,
-                                                     TLS_MAX_VERSION)))
+        if (!TEST_true(SSL_CTX_set_max_proto_version(client_ctx, 0)))
             goto err;
 
         if (test_ctx->handshake_mode == SSL_TEST_HANDSHAKE_RESUME) {
             resume_server_ctx = SSL_CTX_new(TLS_server_method());
-            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_server_ctx,
-                                                     TLS_MAX_VERSION)))
+            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_server_ctx, 0)))
                 goto err;
             resume_client_ctx = SSL_CTX_new(TLS_client_method());
-            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_client_ctx,
-                                                         TLS_MAX_VERSION)))
+            if (!TEST_true(SSL_CTX_set_max_proto_version(resume_client_ctx, 0)))
                 goto err;
             if (!TEST_ptr(resume_server_ctx)
                     || !TEST_ptr(resume_client_ctx))
                 goto err;
         }
     }
+
+#ifdef OPENSSL_NO_AUTOLOAD_CONFIG
+    if (!TEST_true(OPENSSL_init_ssl(OPENSSL_INIT_LOAD_CONFIG, NULL)))
+        goto err;
+#endif
 
     if (!TEST_ptr(server_ctx)
             || !TEST_ptr(client_ctx)
@@ -503,6 +499,8 @@ err:
     HANDSHAKE_RESULT_free(result);
     return ret;
 }
+
+OPT_TEST_DECLARE_USAGE("conf_file\n")
 
 int setup_tests(void)
 {

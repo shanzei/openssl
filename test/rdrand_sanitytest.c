@@ -1,7 +1,7 @@
 /*
  * Copyright 2018 The OpenSSL Project Authors. All Rights Reserved.
- * 
- * Licensed under the OpenSSL license (the "License").  You may not use
+ *
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -20,11 +20,11 @@
 size_t OPENSSL_ia32_rdrand_bytes(unsigned char *buf, size_t len);
 size_t OPENSSL_ia32_rdseed_bytes(unsigned char *buf, size_t len);
 
-void OPENSSL_cpuid_setup();
+void OPENSSL_cpuid_setup(void);
 
 extern unsigned int OPENSSL_ia32cap_P[4];
 
-static int sanity_check_bytes(size_t (*rng)(unsigned char *, size_t), 
+static int sanity_check_bytes(size_t (*rng)(unsigned char *, size_t),
     int rounds, int min_failures, int max_retries, int max_zero_words)
 {
     int testresult = 0;
@@ -81,12 +81,12 @@ end:
     return testresult;
 }
 
-static int sanity_check_rdrand_bytes()
+static int sanity_check_rdrand_bytes(void)
 {
     return sanity_check_bytes(OPENSSL_ia32_rdrand_bytes, 1000, 0, 10, 10);
 }
 
-static int sanity_check_rdseed_bytes()
+static int sanity_check_rdseed_bytes(void)
 {
     /*-
      * RDSEED may take many retries to succeed; note that this is effectively
@@ -97,7 +97,8 @@ static int sanity_check_rdseed_bytes()
     return sanity_check_bytes(OPENSSL_ia32_rdseed_bytes, 1000, 1, 10000, 10);
 }
 
-int setup_tests() {
+int setup_tests(void)
+{
     OPENSSL_cpuid_setup();
 
     int have_rdseed = (OPENSSL_ia32cap_P[2] & (1 << 18)) != 0;
@@ -117,7 +118,7 @@ int setup_tests() {
 
 #else
 
-int setup_tests()
+int setup_tests(void)
 {
     return 1;
 }

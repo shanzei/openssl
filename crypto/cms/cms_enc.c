@@ -1,7 +1,7 @@
 /*
- * Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 2008-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -168,9 +168,10 @@ int cms_EncryptedContent_init(CMS_EncryptedContentInfo *ec,
 {
     ec->cipher = cipher;
     if (key) {
-        ec->key = OPENSSL_malloc(keylen);
-        if (ec->key == NULL)
+        if ((ec->key = OPENSSL_malloc(keylen)) == NULL) {
+            CMSerr(CMS_F_CMS_ENCRYPTEDCONTENT_INIT, ERR_R_MALLOC_FAILURE);
             return 0;
+        }
         memcpy(ec->key, key, keylen);
     }
     ec->keylen = keylen;
@@ -203,7 +204,7 @@ int CMS_EncryptedData_set1_key(CMS_ContentInfo *cms, const EVP_CIPHER *ciph,
     return cms_EncryptedContent_init(ec, ciph, key, keylen);
 }
 
-BIO *cms_EncryptedData_init_bio(CMS_ContentInfo *cms)
+BIO *cms_EncryptedData_init_bio(const CMS_ContentInfo *cms)
 {
     CMS_EncryptedData *enc = cms->d.encryptedData;
     if (enc->encryptedContentInfo->cipher && enc->unprotectedAttrs)

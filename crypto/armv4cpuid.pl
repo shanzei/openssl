@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
-# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2015-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -21,7 +21,6 @@ open OUT,"| \"$^X\" $xlate $flavour $output";
 $code.=<<___;
 #include "arm_arch.h"
 
-.text
 #if defined(__thumb2__) && !defined(__APPLE__)
 .syntax	unified
 .thumb
@@ -29,6 +28,8 @@ $code.=<<___;
 .code	32
 #undef	__thumb2__
 #endif
+
+.text
 
 .align	5
 .global	OPENSSL_atomic_add
@@ -125,7 +126,7 @@ CRYPTO_memcmp:
 
 	ldmia	sp!,{r4,r5}
 .Lno_data:
-	neg	r0,ip
+	rsb	r0,ip,#0
 	mov	r0,r0,lsr#31
 #if __ARM_ARCH__>=5
 	bx	lr

@@ -3,7 +3,7 @@
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -15,6 +15,8 @@
 #include <openssl/comp.h>
 #include <openssl/engine.h>
 #include <openssl/crypto.h>
+#include <openssl/conf.h>
+#include <openssl/trace.h>
 #include "internal/nelem.h"
 #include "ssl_locl.h"
 #include "internal/thread_once.h"
@@ -170,6 +172,8 @@ static int ssl_mac_pkey_id[SSL_MD_NUM_IDX] = {
     EVP_PKEY_HMAC, EVP_PKEY_HMAC, EVP_PKEY_HMAC, NID_undef,
     /* GOST2012_512 */
     EVP_PKEY_HMAC,
+    /* MD5/SHA1, SHA224, SHA512 */
+    NID_undef, NID_undef, NID_undef
 };
 
 static size_t ssl_mac_secret_size[SSL_MD_NUM_IDX];
@@ -504,10 +508,7 @@ int ssl_cipher_get_evp(const SSL_SESSION *s, const EVP_CIPHER **enc,
         ctmp.id = s->compress_meth;
         if (ssl_comp_methods != NULL) {
             i = sk_SSL_COMP_find(ssl_comp_methods, &ctmp);
-            if (i >= 0)
-                *comp = sk_SSL_COMP_value(ssl_comp_methods, i);
-            else
-                *comp = NULL;
+            *comp = sk_SSL_COMP_value(ssl_comp_methods, i);
         }
         /* If were only interested in comp then return success */
         if ((enc == NULL) && (md == NULL))
@@ -781,12 +782,12 @@ static void ssl_cipher_apply_rule(uint32_t cipher_id, uint32_t alg_mkey,
     const SSL_CIPHER *cp;
     int reverse = 0;
 
-#ifdef CIPHER_DEBUG
-    fprintf(stderr,
-            "Applying rule %d with %08x/%08x/%08x/%08x/%08x %08x (%d)\n",
-            rule, alg_mkey, alg_auth, alg_enc, alg_mac, min_tls,
-            algo_strength, strength_bits);
-#endif
+    OSSL_TRACE_BEGIN(TLS_CIPHER){
+        BIO_printf(trc_out,
+                   "Applying rule %d with %08x/%08x/%08x/%08x/%08x %08x (%d)\n",
+                   rule, alg_mkey, alg_auth, alg_enc, alg_mac, min_tls,
+                   algo_strength, strength_bits);
+    }
 
     if (rule == CIPHER_DEL || rule == CIPHER_BUMP)
         reverse = 1;            /* needed to maintain sorting between currently
@@ -825,13 +826,14 @@ static void ssl_cipher_apply_rule(uint32_t cipher_id, uint32_t alg_mkey,
             if (strength_bits != cp->strength_bits)
                 continue;
         } else {
-#ifdef CIPHER_DEBUG
-            fprintf(stderr,
-                    "\nName: %s:\nAlgo = %08x/%08x/%08x/%08x/%08x Algo_strength = %08x\n",
-                    cp->name, cp->algorithm_mkey, cp->algorithm_auth,
-                    cp->algorithm_enc, cp->algorithm_mac, cp->min_tls,
-                    cp->algo_strength);
-#endif
+            if (trc_out != NULL) {
+                BIO_printf(trc_out,
+                           "\nName: %s:"
+                           "\nAlgo = %08x/%08x/%08x/%08x/%08x Algo_strength = %08x\n",
+                           cp->name, cp->algorithm_mkey, cp->algorithm_auth,
+                           cp->algorithm_enc, cp->algorithm_mac, cp->min_tls,
+                           cp->algo_strength);
+            }
             if (cipher_id != 0 && (cipher_id != cp->id))
                 continue;
             if (alg_mkey && !(alg_mkey & cp->algorithm_mkey))
@@ -852,9 +854,8 @@ static void ssl_cipher_apply_rule(uint32_t cipher_id, uint32_t alg_mkey,
                 continue;
         }
 
-#ifdef CIPHER_DEBUG
-        fprintf(stderr, "Action = %d\n", rule);
-#endif
+        if (trc_out != NULL)
+            BIO_printf(trc_out, "Action = %d\n", rule);
 
         /* add the cipher if it has not been added yet. */
         if (rule == CIPHER_ADD) {
@@ -904,6 +905,8 @@ static void ssl_cipher_apply_rule(uint32_t cipher_id, uint32_t alg_mkey,
 
     *head_p = head;
     *tail_p = tail;
+
+    OSSL_TRACE_END(TLS_CIPHER);
 }
 
 static int ssl_cipher_strength_sort(CIPHER_ORDER **head_p,
@@ -1274,6 +1277,131 @@ static int check_suiteb_cipher_list(const SSL_METHOD *meth, CERT *c,
 }
 #endif
 
+static int ciphersuite_cb(const char *elem, int len, void *arg)
+{
+    STACK_OF(SSL_CIPHER) *ciphersuites = (STACK_OF(SSL_CIPHER) *)arg;
+    const SSL_CIPHER *cipher;
+    /* Arbitrary sized temp buffer for the cipher name. Should be big enough */
+    char name[80];
+
+    if (len > (int)(sizeof(name) - 1)) {
+        SSLerr(SSL_F_CIPHERSUITE_CB, SSL_R_NO_CIPHER_MATCH);
+        return 0;
+    }
+
+    memcpy(name, elem, len);
+    name[len] = '\0';
+
+    cipher = ssl3_get_cipher_by_std_name(name);
+    if (cipher == NULL) {
+        SSLerr(SSL_F_CIPHERSUITE_CB, SSL_R_NO_CIPHER_MATCH);
+        return 0;
+    }
+
+    if (!sk_SSL_CIPHER_push(ciphersuites, cipher)) {
+        SSLerr(SSL_F_CIPHERSUITE_CB, ERR_R_INTERNAL_ERROR);
+        return 0;
+    }
+
+    return 1;
+}
+
+static __owur int set_ciphersuites(STACK_OF(SSL_CIPHER) **currciphers, const char *str)
+{
+    STACK_OF(SSL_CIPHER) *newciphers = sk_SSL_CIPHER_new_null();
+
+    if (newciphers == NULL)
+        return 0;
+
+    /* Parse the list. We explicitly allow an empty list */
+    if (*str != '\0'
+            && !CONF_parse_list(str, ':', 1, ciphersuite_cb, newciphers)) {
+        sk_SSL_CIPHER_free(newciphers);
+        return 0;
+    }
+    sk_SSL_CIPHER_free(*currciphers);
+    *currciphers = newciphers;
+
+    return 1;
+}
+
+static int update_cipher_list_by_id(STACK_OF(SSL_CIPHER) **cipher_list_by_id,
+                                    STACK_OF(SSL_CIPHER) *cipherstack)
+{
+    STACK_OF(SSL_CIPHER) *tmp_cipher_list = sk_SSL_CIPHER_dup(cipherstack);
+
+    if (tmp_cipher_list == NULL) {
+        return 0;
+    }
+
+    sk_SSL_CIPHER_free(*cipher_list_by_id);
+    *cipher_list_by_id = tmp_cipher_list;
+
+    (void)sk_SSL_CIPHER_set_cmp_func(*cipher_list_by_id, ssl_cipher_ptr_id_cmp);
+    sk_SSL_CIPHER_sort(*cipher_list_by_id);
+
+    return 1;
+}
+
+static int update_cipher_list(STACK_OF(SSL_CIPHER) **cipher_list,
+                              STACK_OF(SSL_CIPHER) **cipher_list_by_id,
+                              STACK_OF(SSL_CIPHER) *tls13_ciphersuites)
+{
+    int i;
+    STACK_OF(SSL_CIPHER) *tmp_cipher_list = sk_SSL_CIPHER_dup(*cipher_list);
+
+    if (tmp_cipher_list == NULL)
+        return 0;
+
+    /*
+     * Delete any existing TLSv1.3 ciphersuites. These are always first in the
+     * list.
+     */
+    while (sk_SSL_CIPHER_num(tmp_cipher_list) > 0
+           && sk_SSL_CIPHER_value(tmp_cipher_list, 0)->min_tls
+              == TLS1_3_VERSION)
+        sk_SSL_CIPHER_delete(tmp_cipher_list, 0);
+
+    /* Insert the new TLSv1.3 ciphersuites */
+    for (i = 0; i < sk_SSL_CIPHER_num(tls13_ciphersuites); i++)
+        sk_SSL_CIPHER_insert(tmp_cipher_list,
+                             sk_SSL_CIPHER_value(tls13_ciphersuites, i), i);
+
+    if (!update_cipher_list_by_id(cipher_list_by_id, tmp_cipher_list))
+        return 0;
+
+    sk_SSL_CIPHER_free(*cipher_list);
+    *cipher_list = tmp_cipher_list;
+
+    return 1;
+}
+
+int SSL_CTX_set_ciphersuites(SSL_CTX *ctx, const char *str)
+{
+    int ret = set_ciphersuites(&(ctx->tls13_ciphersuites), str);
+
+    if (ret && ctx->cipher_list != NULL) {
+        /* We already have a cipher_list, so we need to update it */
+        return update_cipher_list(&ctx->cipher_list, &ctx->cipher_list_by_id,
+                                  ctx->tls13_ciphersuites);
+    }
+
+    return ret;
+}
+
+int SSL_set_ciphersuites(SSL *s, const char *str)
+{
+    int ret = set_ciphersuites(&(s->tls13_ciphersuites), str);
+
+    if (ret && s->cipher_list != NULL) {
+        /* We already have a cipher_list, so we need to update it */
+        return update_cipher_list(&s->cipher_list, &s->cipher_list_by_id,
+                                  s->tls13_ciphersuites);
+    }
+
+    return ret;
+}
+
 STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
                                              STACK_OF(SSL_CIPHER) *tls13_ciphersuites,
                                              STACK_OF(SSL_CIPHER) **cipher_list,
@@ -1283,7 +1411,7 @@ STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
 {
     int ok, num_of_ciphers, num_of_alias_max, num_of_group_aliases, i;
     uint32_t disabled_mkey, disabled_auth, disabled_enc, disabled_mac;
-    STACK_OF(SSL_CIPHER) *cipherstack, *tmp_cipher_list;
+    STACK_OF(SSL_CIPHER) *cipherstack;
     const char *rule_p;
     CIPHER_ORDER *co_list = NULL, *head = NULL, *tail = NULL, *curr;
     const SSL_CIPHER **ca_list = NULL;
@@ -1480,6 +1608,9 @@ STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
         }
     }
 
+    OSSL_TRACE_BEGIN(TLS_CIPHER) {
+        BIO_printf(trc_out, "cipher selection:\n");
+    }
     /*
      * The cipher selection for the list is done. The ciphers are added
      * to the resulting precedence to the STACK_OF(SSL_CIPHER).
@@ -1489,28 +1620,23 @@ STACK_OF(SSL_CIPHER) *ssl_create_cipher_list(const SSL_METHOD *ssl_method,
             if (!sk_SSL_CIPHER_push(cipherstack, curr->cipher)) {
                 OPENSSL_free(co_list);
                 sk_SSL_CIPHER_free(cipherstack);
+                OSSL_TRACE_CANCEL(TLS_CIPHER);
                 return NULL;
             }
-#ifdef CIPHER_DEBUG
-            fprintf(stderr, "<%s>\n", curr->cipher->name);
-#endif
+            if (trc_out != NULL)
+                BIO_printf(trc_out, "<%s>\n", curr->cipher->name);
         }
     }
     OPENSSL_free(co_list);      /* Not needed any longer */
+    OSSL_TRACE_END(TLS_CIPHER);
 
-    tmp_cipher_list = sk_SSL_CIPHER_dup(cipherstack);
-    if (tmp_cipher_list == NULL) {
+    if (!update_cipher_list_by_id(cipher_list_by_id, cipherstack)) {
         sk_SSL_CIPHER_free(cipherstack);
         return NULL;
     }
     sk_SSL_CIPHER_free(*cipher_list);
     *cipher_list = cipherstack;
-    if (*cipher_list_by_id != NULL)
-        sk_SSL_CIPHER_free(*cipher_list_by_id);
-    *cipher_list_by_id = tmp_cipher_list;
-    (void)sk_SSL_CIPHER_set_cmp_func(*cipher_list_by_id, ssl_cipher_ptr_id_cmp);
 
-    sk_SSL_CIPHER_sort(*cipher_list_by_id);
     return cipherstack;
 }
 
@@ -1523,9 +1649,10 @@ char *SSL_CIPHER_description(const SSL_CIPHER *cipher, char *buf, int len)
 
     if (buf == NULL) {
         len = 128;
-        buf = OPENSSL_malloc(len);
-        if (buf == NULL)
+        if ((buf = OPENSSL_malloc(len)) == NULL) {
+            SSLerr(SSL_F_SSL_CIPHER_DESCRIPTION, ERR_R_MALLOC_FAILURE);
             return NULL;
+        }
     } else if (len < 128) {
         return NULL;
     }

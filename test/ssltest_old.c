@@ -3,7 +3,7 @@
  * Copyright (c) 2002, Oracle and/or its affiliates. All rights reserved
  * Copyright 2005 Nokia. All rights reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -423,7 +423,7 @@ static int serverinfo_cli_parse_cb(SSL *s, unsigned int ext_type,
     return 1;
 }
 
-static int verify_serverinfo()
+static int verify_serverinfo(void)
 {
     if (serverinfo_sct != serverinfo_sct_seen)
         return -1;
@@ -779,7 +779,7 @@ static void print_details(SSL *c_ssl, const char *prefix)
         }
         X509_free(cert);
     }
-    if (SSL_get_server_tmp_key(c_ssl, &pkey)) {
+    if (SSL_get_peer_tmp_key(c_ssl, &pkey)) {
         BIO_puts(bio_stdout, ", temp key: ");
         print_key_details(bio_stdout, pkey);
         EVP_PKEY_free(pkey);
@@ -1331,8 +1331,8 @@ int main(int argc, char *argv[])
         min_version = TLS1_2_VERSION;
         max_version = TLS1_2_VERSION;
     } else {
-        min_version = SSL3_VERSION;
-        max_version = TLS_MAX_VERSION;
+        min_version = 0;
+        max_version = 0;
     }
 #endif
 #ifndef OPENSSL_NO_DTLS
@@ -1345,8 +1345,8 @@ int main(int argc, char *argv[])
             min_version = DTLS1_2_VERSION;
             max_version = DTLS1_2_VERSION;
         } else {
-            min_version = DTLS_MIN_VERSION;
-            max_version = DTLS_MAX_VERSION;
+            min_version = 0;
+            max_version = 0;
         }
     }
 #endif
@@ -1382,11 +1382,52 @@ int main(int argc, char *argv[])
         goto end;
 
     if (cipher != NULL) {
-        if (!SSL_CTX_set_cipher_list(c_ctx, cipher)
-            || !SSL_CTX_set_cipher_list(s_ctx, cipher)
-            || !SSL_CTX_set_cipher_list(s_ctx2, cipher)) {
-            ERR_print_errors(bio_err);
-            goto end;
+        if (strcmp(cipher, "") == 0) {
+            if (!SSL_CTX_set_cipher_list(c_ctx, cipher)) {
+                if (ERR_GET_REASON(ERR_peek_error()) == SSL_R_NO_CIPHER_MATCH) {
+                    ERR_clear_error();
+                } else {
+                    ERR_print_errors(bio_err);
+                    goto end;
+                }
+            } else {
+                /* Should have failed when clearing all TLSv1.2 ciphers. */
+                fprintf(stderr, "CLEARING ALL TLSv1.2 CIPHERS SHOULD FAIL\n");
+                goto end;
+            }
+
+            if (!SSL_CTX_set_cipher_list(s_ctx, cipher)) {
+                if (ERR_GET_REASON(ERR_peek_error()) == SSL_R_NO_CIPHER_MATCH) {
+                    ERR_clear_error();
+                } else {
+                    ERR_print_errors(bio_err);
+                    goto end;
+                }
+            } else {
+                /* Should have failed when clearing all TLSv1.2 ciphers. */
+                fprintf(stderr, "CLEARING ALL TLSv1.2 CIPHERS SHOULD FAIL\n");
+                goto end;
+            }
+
+            if (!SSL_CTX_set_cipher_list(s_ctx2, cipher)) {
+                if (ERR_GET_REASON(ERR_peek_error()) == SSL_R_NO_CIPHER_MATCH) {
+                    ERR_clear_error();
+                } else {
+                    ERR_print_errors(bio_err);
+                    goto end;
+                }
+            } else {
+                /* Should have failed when clearing all TLSv1.2 ciphers. */
+                fprintf(stderr, "CLEARING ALL TLSv1.2 CIPHERS SHOULD FAIL\n");
+                goto end;
+            }
+        } else {
+            if (!SSL_CTX_set_cipher_list(c_ctx, cipher)
+                    || !SSL_CTX_set_cipher_list(s_ctx, cipher)
+                    || !SSL_CTX_set_cipher_list(s_ctx2, cipher)) {
+                ERR_print_errors(bio_err);
+                goto end;
+            }
         }
     }
     if (ciphersuites != NULL) {
@@ -1836,7 +1877,8 @@ int doit_localhost(SSL *s_ssl, SSL *c_ssl, int family, long count,
     int err_in_client = 0;
     int err_in_server = 0;
 
-    acpt = BIO_new_accept("0");
+    acpt = BIO_new_accept(family == BIO_FAMILY_IPV4 ? "127.0.0.1:0"
+                                                    : "[::1]:0");
     if (acpt == NULL)
         goto err;
     BIO_set_accept_ip_family(acpt, family);
@@ -2835,7 +2877,7 @@ static int app_verify_callback(X509_STORE_CTX *ctx, void *arg)
  *    $ openssl dhparam -C -noout -dsaparam 1024
  * (The third function has been renamed to avoid name conflicts.)
  */
-static DH *get_dh512()
+static DH *get_dh512(void)
 {
     static unsigned char dh512_p[] = {
         0xCB, 0xC8, 0xE1, 0x86, 0xD0, 0x1F, 0x94, 0x17, 0xA6, 0x99, 0xF0,
@@ -2869,7 +2911,7 @@ static DH *get_dh512()
     return dh;
 }
 
-static DH *get_dh1024()
+static DH *get_dh1024(void)
 {
     static unsigned char dh1024_p[] = {
         0xF8, 0x81, 0x89, 0x7D, 0x14, 0x24, 0xC5, 0xD1, 0xE6, 0xF7, 0xBF,
@@ -2913,7 +2955,7 @@ static DH *get_dh1024()
     return dh;
 }
 
-static DH *get_dh1024dsa()
+static DH *get_dh1024dsa(void)
 {
     static unsigned char dh1024_p[] = {
         0xC8, 0x00, 0xF7, 0x08, 0x07, 0x89, 0x4D, 0x90, 0x53, 0xF3, 0xD5,

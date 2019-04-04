@@ -1,7 +1,7 @@
 /*
  * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -389,11 +389,14 @@ static SSL *doConnection(SSL *scon, const char *host, SSL_CTX *ctx)
 #if defined(SOL_SOCKET) && defined(SO_LINGER)
     {
         struct linger no_linger;
+        int fd;
 
         no_linger.l_onoff  = 1;
         no_linger.l_linger = 0;
-        (void) setsockopt(SSL_get_fd(serverCon), SOL_SOCKET, SO_LINGER,
-                          (char*)&no_linger, sizeof(no_linger));
+        fd = SSL_get_fd(serverCon);
+        if (fd >= 0)
+            (void)setsockopt(fd, SOL_SOCKET, SO_LINGER, (char*)&no_linger,
+                             sizeof(no_linger));
     }
 #endif
 

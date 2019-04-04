@@ -1,7 +1,7 @@
 /*
  * Copyright 1995-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -123,6 +123,11 @@ opthelp:
     if (argc == 1) {
         if (!opt_int(argv[0], &num) || num <= 0)
             goto end;
+        if (num > OPENSSL_RSA_MAX_MODULUS_BITS)
+            BIO_printf(bio_err,
+                       "Warning: It is not recommended to use more than %d bit for RSA keys.\n"
+                       "         Your key size is %d! Larger key size may behave not as expected.\n",
+                       OPENSSL_RSA_MAX_MODULUS_BITS, num);
     } else if (argc > 0) {
         BIO_printf(bio_err, "Extra arguments given.\n");
         goto opthelp;

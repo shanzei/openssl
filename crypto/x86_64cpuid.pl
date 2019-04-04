@@ -1,7 +1,7 @@
 #! /usr/bin/env perl
 # Copyright 2005-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -271,6 +271,18 @@ CRYPTO_memcmp:
 	xor	%r10,%r10
 	cmp	\$0,$arg3
 	je	.Lno_data
+	cmp	\$16,$arg3
+	jne	.Loop_cmp
+	mov	($arg1),%r10
+	mov	8($arg1),%r11
+	mov	\$1,$arg3
+	xor	($arg2),%r10
+	xor	8($arg2),%r11
+	or	%r11,%r10
+	cmovnz	$arg3,%rax
+	ret
+
+.align	16
 .Loop_cmp:
 	mov	($arg1),%r10b
 	lea	1($arg1),$arg1

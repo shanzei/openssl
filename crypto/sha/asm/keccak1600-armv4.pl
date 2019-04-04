@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 # Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -70,6 +70,21 @@
 #	Cortex-Mx, x>=3. Otherwise, non-NEON results for NEON-capable
 #	processors are presented mostly for reference purposes.
 
+$flavour = shift;
+if ($flavour=~/\w[\w\-]*\.\w+$/) { $output=$flavour; undef $flavour; }
+else { while (($output=shift) && ($output!~/\w[\w\-]*\.\w+$/)) {} }
+
+if ($flavour && $flavour ne "void") {
+    $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
+    ( $xlate="${dir}arm-xlate.pl" and -f $xlate ) or
+    ( $xlate="${dir}../../perlasm/arm-xlate.pl" and -f $xlate) or
+    die "can't locate arm-xlate.pl";
+
+    open STDOUT,"| \"$^X\" $xlate $flavour $output";
+} else {
+    open STDOUT,">$output";
+}
+
 my @C = map("r$_",(0..9));
 my @E = map("r$_",(10..12,14));
 
@@ -96,7 +111,7 @@ my @D = map(8*$_, (25..29));
 my @T = map([ 8*$_, 8*($_+1), 8*($_+2), 8*($_+3), 8*($_+4) ], (30,35,40,45,50));
 
 $code.=<<___;
-.text
+#include "arm_arch.h"
 
 #if defined(__thumb2__)
 .syntax	unified
@@ -104,6 +119,8 @@ $code.=<<___;
 #else
 .code	32
 #endif
+
+.text
 
 .type	iotas32, %object
 .align	5
@@ -674,7 +691,14 @@ ___
 $code.=<<___;
 	blo	.Lround2x
 
+#if __ARM_ARCH__>=5
 	ldr	pc,[sp,#440]
+#else
+	ldr	lr,[sp,#440]
+	tst	lr,#1
+	moveq	pc,lr		@ be binary compatible with V4, yet
+	bx	lr		@ interoperable with Thumb ISA:-)
+#endif
 .size	KeccakF1600_int,.-KeccakF1600_int
 
 .type	KeccakF1600, %function
@@ -713,7 +737,14 @@ KeccakF1600:
 	stmia	@E[1], {@C[0]-@C[9]}
 
 	add	sp,sp,#440+20
+#if __ARM_ARCH__>=5
 	ldmia	sp!,{r4-r11,pc}
+#else
+	ldmia	sp!,{r4-r11,lr}
+	tst	lr,#1
+	moveq	pc,lr		@ be binary compatible with V4, yet
+	bx	lr		@ interoperable with Thumb ISA:-)
+#endif
 .size	KeccakF1600,.-KeccakF1600
 ___
 { my ($A_flat,$inp,$len,$bsz) = map("r$_",(10..12,14));
@@ -888,7 +919,14 @@ SHA3_absorb:
 .Labsorb_abort:
 	add	sp,sp,#456+32
 	mov	r0,$len			@ return value
+#if __ARM_ARCH__>=5
 	ldmia	sp!,{r4-r12,pc}
+#else
+	ldmia	sp!,{r4-r12,lr}
+	tst	lr,#1
+	moveq	pc,lr		@ be binary compatible with V4, yet
+	bx	lr		@ interoperable with Thumb ISA:-)
+#endif
 .size	SHA3_absorb,.-SHA3_absorb
 ___
 }
@@ -1038,12 +1076,20 @@ SHA3_squeeze:
 .align	4
 .Lsqueeze_done:
 	add	sp,sp,#24
+#if __ARM_ARCH__>=5
 	ldmia	sp!,{r4-r10,pc}
+#else
+	ldmia	sp!,{r4-r10,lr}
+	tst	lr,#1
+	moveq	pc,lr		@ be binary compatible with V4, yet
+	bx	lr		@ interoperable with Thumb ISA:-)
+#endif
 .size	SHA3_squeeze,.-SHA3_squeeze
 ___
 }
 
 $code.=<<___;
+#if __ARM_MAX_ARCH__>=7
 .fpu	neon
 
 .type	iotas64, %object
@@ -1247,7 +1293,7 @@ KeccakF1600_neon:
 	subs	r3, r3, #1
 	bne	.Loop_neon
 
-	bx	lr
+	ret
 .size	KeccakF1600_neon,.-KeccakF1600_neon
 
 .global	SHA3_absorb_neon
@@ -1545,6 +1591,7 @@ SHA3_squeeze_neon:
 .Lsqueeze_neon_done:
 	ldmia	sp!, {r4-r6,pc}
 .size	SHA3_squeeze_neon,.-SHA3_squeeze_neon
+#endif
 .asciz	"Keccak-1600 absorb and squeeze for ARMv4/NEON, CRYPTOGAMS by <appro\@openssl.org>"
 .align	2
 ___
@@ -1573,13 +1620,11 @@ ___
     }
 }
 
-$output=pop;
-open STDOUT,">$output";
-
 foreach (split($/,$code)) {
 	s/\`([^\`]*)\`/eval $1/ge;
 
 	s/^\s+(ldr|str)\.([lh])\s+(r[0-9]+),\s*(\[.*)/ldrd($1,$2,$3,$4)/ge or
+	s/\b(ror|ls[rl])\s+(r[0-9]+.*)#/mov	$2$1#/g or
 	s/\bret\b/bx	lr/g		or
 	s/\bbx\s+lr\b/.word\t0xe12fff1e/g;	# make it possible to compile with -march=armv4
 

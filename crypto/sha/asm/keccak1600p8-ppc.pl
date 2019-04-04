@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
-# Copyright 2017 The OpenSSL Project Authors. All Rights Reserved.
+# Copyright 2017-2018 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Licensed under the OpenSSL license (the "License").  You may not use
+# Licensed under the Apache License 2.0 (the "License").  You may not use
 # this file except in compliance with the License.  You can obtain a copy
 # in the file LICENSE in the source distribution or at
 # https://www.openssl.org/source/license.html
@@ -23,7 +23,7 @@
 # buffer for r=1088, which matches SHA3-256. This is 17% better than
 # scalar PPC64 code. It probably should be noted that if POWER8's
 # successor can achieve higher scalar instruction issue rate, then
-# this module will loose...
+# this module will loose... And it does on POWER9 with 12.0 vs. 9.4.
 
 $flavour = shift;
 

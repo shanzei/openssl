@@ -1,7 +1,7 @@
 /*
- * Copyright 1999-2017 The OpenSSL Project Authors. All Rights Reserved.
+ * Copyright 1999-2018 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Licensed under the OpenSSL license (the "License").  You may not use
+ * Licensed under the Apache License 2.0 (the "License").  You may not use
  * this file except in compliance with the License.  You can obtain a copy
  * in the file LICENSE in the source distribution or at
  * https://www.openssl.org/source/license.html
@@ -156,9 +156,10 @@ static ASN1_STRING_TABLE *stable_get(int nid)
     tmp = ASN1_STRING_TABLE_get(nid);
     if (tmp != NULL && tmp->flags & STABLE_FLAGS_MALLOC)
         return tmp;
-    rv = OPENSSL_zalloc(sizeof(*rv));
-    if (rv == NULL)
+    if ((rv = OPENSSL_zalloc(sizeof(*rv))) == NULL) {
+        ASN1err(ASN1_F_STABLE_GET, ERR_R_MALLOC_FAILURE);
         return NULL;
+    }
     if (!sk_ASN1_STRING_TABLE_push(stable, rv)) {
         OPENSSL_free(rv);
         return NULL;
